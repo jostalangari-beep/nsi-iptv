@@ -1,0 +1,137 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>NSI IPTV - Smart TV (Samsung / LG / Web)</title>
+  <script src="https://cdn.jsdelivr.net/npm/mpegts.js@1.7.3/dist/mpegts.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/hls.js@1.5.7/dist/hls.min.js"></script>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; font-family: Arial, sans-serif; }
+    body { background: #0B0F19; color: #FFF; display: flex; height: 100vh; overflow: hidden; }
+    #sidebar { width: 340px; background: #111827; border-right: 1px solid #1F2937; display: flex; flex-direction: column; }
+    .brand { padding: 16px; background: #0F172A; display: flex; align-items: center; gap: 10px; border-bottom: 1px solid #1F2937; }
+    .brand span { background: #E50914; padding: 6px 12px; border-radius: 6px; font-weight: bold; }
+    .config-bar { padding: 10px; display: flex; gap: 6px; background: #161F30; }
+    .config-bar input { flex: 1; padding: 8px; border-radius: 6px; border: none; background: #0B0F19; color: #FFF; }
+    .config-bar button { padding: 8px 12px; background: #E50914; color: #FFF; border: none; border-radius: 6px; cursor: pointer; font-weight: bold; }
+    #channel-list { flex: 1; overflow-y: auto; padding: 10px; }
+    .channel-item { padding: 14px 12px; margin-bottom: 8px; background: #1E293B; border-radius: 8px; cursor: pointer; border: 2px solid transparent; display: flex; justify-content: space-between; align-items: center; }
+    .channel-item:focus, .channel-item.active { border-color: #00E5FF; background: #26354D; outline: none; }
+    #player-area { flex: 1; display: flex; flex-direction: column; background: #000; position: relative; }
+    video { width: 100%; height: 100%; background: #000; }
+    #status-bar { position: absolute; top: 16px; left: 16px; background: rgba(15, 23, 42, 0.85); padding: 10px 16px; border-radius: 8px; border-left: 4px solid #E50914; pointer-events: none; }
+  </style>
+</head>
+<body>
+
+  <div id="sidebar">
+    <div class="brand">
+      <span>NSI IPTV</span>
+      <small>Samsung / LG / Web</small>
+    </div>
+    <div class="config-bar">
+      <input type="text" id="m3u-url" value="http://192.168.2.150/playlist.m3u" placeholder="URL M3U" />
+      <button onclick="loadM3U()">Cargar</button>
+    </div>
+    <div id="channel-list"></div>
+  </div>
+
+  <div id="player-area">
+    <div id="status-bar">Selecciona un canal con el control remoto o táctil</div>
+    <video id="video-element" controls autoplay playsinline></video>
+  </div>
+
+  <script>
+    let channels = [];
+    let mpegtsPlayer = null;
+    let hlsPlayer = null;
+
+    async function loadM3U() {
+      const url = document.getElementById('m3u-url').value.trim();
+      const status = document.getElementById('status-bar');
+      status.innerText = 'Cargando lista desde ' + url + '...';
+
+      try {
+        const res = await fetch(url);
+        const text = await res.text();
+        parseM3U(text, url);
+      } catch (err) {
+        status.innerText = 'Error al cargar lista M3U. Verifica CORS o la ruta en 192.168.2.150';
+      }
+    }
+
+    function parseM3U(content, baseUrl) {
+      const lines = content.split(/\r?\n/);
+      channels = [];
+      let currentName = 'Canal NSI';
+      let currentGroup = 'TV';
+
+      for (let line of lines) {
+        line = line.trim();
+        if (!line) continue;
+        if (line.startsWith('#EXTINF:')) {
+          const comma = line.lastIndexOf(',');
+          if (comma !== -1) currentName = line.substring(comma + 1).trim();
+        } else if (!line.startsWith('#')) {
+          channels.push({ name: currentName, group: currentGroup, url: line });
+          currentName = 'Canal ' + (channels.length + 1);
+        }
+      }
+      renderChannels();
+      if (channels.length > 0) playChannel(0);
+    }
+
+    function renderChannels() {
+      const container = document.getElementById('channel-list');
+      container.innerHTML = '';
+      channels.forEach((ch, idx) => {
+        const div = document.createElement('div');
+        div.className = 'channel-item';
+        div.tabIndex = 0;
+        div.innerHTML = `<strong>${idx + 1}. ${ch.name}</strong>`;
+        div.onclick = () => playChannel(idx);
+        div.onkeydown = (e) => {
+          if (e.key === 'Enter') playChannel(idx);
+        };
+        container.appendChild(div);
+      });
+    }
+
+    function playChannel(index) {
+      const ch = channels[index];
+      if (!ch) return;
+
+      const video = document.getElementById('video-element');
+      const status = document.getElementById('status-bar');
+      status.innerText = 'Reproduciendo: ' + ch.name;
+
+      if (mpegtsPlayer) { mpegtsPlayer.destroy(); mpegtsPlayer = null; }
+      if (hlsPlayer) { hlsPlayer.destroy(); hlsPlayer = null; }
+
+      const isHls = ch.url.includes('.m3u8');
+
+      if (!isHls && mpegts.getFeatureList().mseLivePlayback) {
+        mpegtsPlayer = mpegts.createPlayer({
+          type: 'mpegts',
+          isLive: true,
+          url: ch.url
+        });
+        mpegtsPlayer.attachMediaElement(video);
+        mpegtsPlayer.load();
+        mpegtsPlayer.play();
+      } else if (isHls && Hls.isSupported()) {
+        hlsPlayer = new Hls();
+        hlsPlayer.loadSource(ch.url);
+        hlsPlayer.attachMediaElement(video);
+        hlsPlayer.on(Hls.Events.MANIFEST_PARSED, () => video.play());
+      } else {
+        video.src = ch.url;
+        video.play();
+      }
+    }
+
+    window.onload = loadM3U;
+  </script>
+</body>
+</html>
